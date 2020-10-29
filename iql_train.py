@@ -2,11 +2,6 @@ from replay_buffer2 import ReplayBuffer
 from iql_agent import Agent
 
 
-
-
-
-
-
 def train(env, config):
     """
 
@@ -20,6 +15,9 @@ def train(env, config):
         text = "Inverse Episode {}  \ {} \r".format(i_episode, config["episodes"])
         print(text, end = '')
         agent.learn(memory)
-        if i_episode % 500 == 0:
-            agent.eval_policy(env)
-            agent.test_q_value(memory)
+        if i_episode % 5000 == 0:
+            agent.save("pytorch_models/")
+            agent.test_predicter(memory)
+            print("save model")
+            # agent.eval_policy(env)
+            # agent.test_q_value(memory)

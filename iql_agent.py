@@ -19,7 +19,7 @@ class Agent():
         self.seed = 0
         self.device = 'cuda'
         self.batch_size = config["batch_size"]
-        self.lr = 0.005
+        self.lr = config["lr"]
         self.gamma = 0.99
         self.q_shift_local = QNetwork(state_size, action_size, self.seed).to(self.device)
         self.q_shift_target = QNetwork(state_size, action_size, self.seed).to(self.device)
@@ -51,6 +51,7 @@ class Agent():
         # actions = actions[0]
         # print("states ",  states)
         self.state_action_frq(states, actions)
+        return 
         self.compute_shift_function(next_states, actions)
         self.compute_r_function(states, actions)
         self.compute_q_function(states, next_states, actions)
@@ -60,17 +61,30 @@ class Agent():
         self.soft_update(self.R_local, self.R_target)
         return
 
+
+    def test_predicter(self, memory):
+        """
         
-                
+        """
+        states, next_states, actions = memory.expert_policy(1)
+        output = self.predicter(states.unsqueeze(0))
+        # create one hot encode y from actions
+        y = actions.type(torch.long)
+        print("sum  out ", torch.sum(output))
+        print("compare pred {}  real {} ".format(output, y))
+        print("compare pred {}  real {} ".format(torch.argmax(output), y))
 
     def state_action_frq(self, states, action):
         """ Train classifer to compute state action freq
         """
         self.steps +=1
-        output = self.predicter(states)
+        output = self.predicter(states.unsqueeze(0))
+        output = output.squeeze(0)
+        #print("out shape", output.shape)
         # create one hot encode y from actions
-        y = action.type(torch.long)
-        y = y.squeeze(1) 
+        
+        y = action.type(torch.long).squeeze(1)
+        #print("y shape", y.shape)
         loss = nn.CrossEntropyLoss()(output, y)
         self.optimizer_pre.zero_grad()
         loss.backward()
@@ -242,6 +256,9 @@ class Agent():
         print("Q values ", q_values)
 
 
+    def save(self, filename):
+        torch.save(self.predicter.state_dict(), filename + "_predicter.pth")
+        torch.save(self.optimizer_pre.state_dict(), filename + "_predicter_optimizer.pth")
 
 
 
