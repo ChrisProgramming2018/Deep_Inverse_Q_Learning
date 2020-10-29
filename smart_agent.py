@@ -2,7 +2,7 @@ import gym
 import random
 import torch
 import numpy as np
-from dqn_agent import Agent
+from dqn_agent import DQNAgent
 from replay_buffer2 import ReplayBuffer
 
 
@@ -11,7 +11,7 @@ env.seed(0)
 
 print('State shape: ', env.observation_space.shape)
 print('Number of actions: ', env.action_space.n)
-agent = Agent(state_size=8, action_size=4, seed=0)
+agent = DQNAgent(state_size=8, action_size=4, seed=0)
 
 agent.qnetwork_local.load_state_dict(torch.load('checkpoint.pth'))
 memory = ReplayBuffer((8,), (1,), 20000, 'cuda')

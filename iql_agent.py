@@ -27,14 +27,12 @@ class Agent():
         self.Q_target = QNetwork(state_size, action_size, self.seed).to(self.device)
         self.R_local = RNetwork(state_size,action_size, self.seed).to(self.device)
         self.R_target = RNetwork(state_size, action_size, self.seed).to(self.device)
-        self.policy = PolicyNetwork(state_size, action_size,self.seed).to(self.device)
         self.predicter = Classifier(state_size, action_dim, self.seed).to(self.device)
         #self.criterion = nn.CrossEntropyLoss()
         # optimizer
         self.optimizer_q_shift = optim.Adam(self.q_shift_local.parameters(), lr=self.lr)
         self.optimizer_q = optim.Adam(self.Q_local.parameters(), lr=self.lr)
         self.optimizer_r = optim.Adam(self.R_local.parameters(), lr=self.lr)
-        self.optimizer_p = optim.Adam(self.policy.parameters(), lr=self.lr)
         self.optimizer_pre = optim.Adam(self.predicter.parameters(), lr=self.lr)
         pathname = "lr {} batch_size {} seed {}".format(self.lr, self.batch_size, self.seed)
         tensorboard_name = str(config["locexp"]) + '/runs/' + pathname 
@@ -46,9 +44,6 @@ class Agent():
             action = torch.Tensor(1) * 0 +  a
             self.all_actions.append(action.to(self.device))
 
-    def act(self, state):
-        dis, action, log_probs, ent = self.policy.sample_action(torch.Tensor(state).unsqueeze(0))
-        return dis, action, log_probs, ent
 
     
     def learn(self, memory):
@@ -90,13 +85,13 @@ class Agent():
         # check if action prob is zero
         if dim:
             output = self.predicter(states)
-            #output += torch.finfo(torch.float32).eps
             action_prob = output.gather(1, actions.type(torch.long))
+            output = output.detach() +  torch.finfo(torch.float32).eps
             action_prob = torch.log(action_prob)
             return action_prob
         output = self.predicter(states)
-        #output += torch.finfo(torch.float32).eps
         action_prob = output.gather(1, actions.type(torch.long))
+        output = output.detach() +   torch.finfo(torch.float32).eps
         action_prob = torch.log(action_prob)
         return action_prob
 
@@ -120,6 +115,7 @@ class Agent():
         # Minimize the loss
         self.optimizer_q.zero_grad()
         q_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.Q_local.parameters(), 1)
         self.optimizer_q.step()
         self.writer.add_scalar('Q_loss', q_loss, self.steps)
         #print("q update")
@@ -146,6 +142,7 @@ class Agent():
         # Minimize the loss
         self.optimizer_q_shift.zero_grad()
         q_shift_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.q_shift_local.parameters(), 1)
         self.optimizer_q_shift.step()
         # print("q shift update")
 
@@ -183,6 +180,7 @@ class Agent():
         # Minimize the loss
         self.optimizer_r.zero_grad()
         r_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.R_local.parameters(), 1)
         self.optimizer_r.step()
         self.writer.add_scalar('Reward_loss', r_loss, self.steps)
 
@@ -204,7 +202,7 @@ class Agent():
 
         return np.argmax(qs)
 
-    def eval_policy(self, env, episode=5):
+    def eval_policy(self, env, episode=2):
         scores = 0
         for i_episode in range(episode):
             score = 0
@@ -213,15 +211,28 @@ class Agent():
                 action = self.act(state)
                 next_state, reward, done, _ = env.step(action)
                 score += reward
+                env.render()
                 if done:
                     scores += score
                     break
 
-
+        env.close()
         scores /= episode
         print("Average score {}".format(scores))
 
 
+
+    def test_q_value(self, memory):
+        states, next_states, actions = memory.expert_policy(1)
+        q_values = []
+        for a in self.all_actions:
+            q_values.append(self.Q_local(states, a.unsqueeze(0)))
+
+        best_action = np.argmax(q_values)
+
+        print("expert action ", actions)
+        print("inverse action ", best_action)
+        print("Q values ", q_values)
 
 
 
