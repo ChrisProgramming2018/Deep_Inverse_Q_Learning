@@ -85,14 +85,21 @@ class Agent():
         # check if action prob is zero
         if dim:
             output = self.predicter(states)
-            action_prob = output.gather(1, actions.type(torch.long))
             output = output.detach() +  torch.finfo(torch.float32).eps
+            action_prob = output.gather(1, actions.type(torch.long))
+            nx = action_prob.detach().cpu().numpy()
+            if np.where(nx <= 0) == 0:
+                print("single2", action_prob)
             action_prob = torch.log(action_prob)
             return action_prob
         output = self.predicter(states)
-        action_prob = output.gather(1, actions.type(torch.long))
         output = output.detach() +   torch.finfo(torch.float32).eps
+        action_prob = output.gather(1, actions.type(torch.long))
+        nx = action_prob.detach().cpu().numpy()
         action_prob = torch.log(action_prob)
+        s = np.where(nx <= 0)
+        if s[0].shape[0] != 0:
+            print("single2", action_prob)
         return action_prob
 
     def compute_q_function(self, states, next_states,  actions):
