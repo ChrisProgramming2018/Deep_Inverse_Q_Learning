@@ -1,0 +1,14 @@
+{
+  "env_name": "LunarLander-v2",
+  "locexp": "test",
+  "lr":0.7,
+  "episodes": 100000,
+  "gamma":0.618,
+  "decay":0.01,
+  "min_epsilon":0.01,
+  "buffer_size": 100000,
+  "expert_buffer_size": 20000,
+  "batch_size": 64,
+  "buffer_path": "expert_policy",
+  "device": "cuda"
+}
