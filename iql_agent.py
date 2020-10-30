@@ -38,6 +38,7 @@ class Agent():
         tensorboard_name = str(config["locexp"]) + '/runs/' + pathname 
         self.writer = SummaryWriter(tensorboard_name)
         self.average_prediction = deque(maxlen=100)
+        self.average_same_action = deque(maxlen=100)
         self.steps = 0
         self.ratio = 1. / action_dim
         self.all_actions = []
@@ -49,12 +50,12 @@ class Agent():
     
     def learn(self, memory):
         states, next_states, actions = memory.expert_policy(self.batch_size)
+        self.steps += 1
         # actions = actions[0]
         # print("states ",  states)
         # self.state_action_frq(states, actions)
         self.compute_shift_function(next_states, actions)
         self.compute_r_function(states, actions)
-        return 
         self.compute_q_function(states, next_states, actions)
         # update local nets 
         self.soft_update(self.Q_local, self.Q_target)
@@ -266,16 +267,21 @@ class Agent():
 
 
     def test_q_value(self, memory):
-        states, next_states, actions = memory.expert_policy(1)
-        q_values = []
-        for a in self.all_actions:
-            q_values.append(self.Q_local(states, a.unsqueeze(0)))
-
-        best_action = np.argmax(q_values)
-
-        print("expert action ", actions)
-        print("inverse action ", best_action)
-        print("Q values a0 {} a1 {} a2{} a3 {} ".format(q_values[0][0][0].data,0,0,0))
+        same_action = 0
+        for i in range(100):
+            states, next_states, actions = memory.expert_policy(1)
+            q_values = []
+            for a in self.all_actions:
+                q_values.append(self.Q_local(states, a.unsqueeze(0)))
+            best_action = np.argmax(q_values)
+            if  actions[0][0].item() == best_action:
+                same_action += 1
+        print("    ")
+        print("Q values a0: {:.2f} a1: {:.2f} a2: {:.2f} a3: {:.2f}".format(q_values[0][0][0].data, q_values[1][0][0].data, q_values[2][0][0].data, q_values[2][0][0].data))
+        print("same action {} of 100".format(same_action))
+        self.average_same_action.append(same_action)
+        av_action = np.mean(self.average_same_action)
+        self.writer.add_scalar('Average_same_action', av_action, self.steps)
 
     def save(self, filename):
         """
