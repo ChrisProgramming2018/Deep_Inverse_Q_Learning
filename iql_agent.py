@@ -1,3 +1,4 @@
+import os
 import sys
 import numpy as np
 import random
@@ -19,7 +20,7 @@ class Agent():
         self.seed = 0
         self.device = 'cuda'
         self.batch_size = config["batch_size"]
-        self.lr = config["lr"]
+        self.lr = 0.005
         self.gamma = 0.99
         self.q_shift_local = QNetwork(state_size, action_size, self.seed).to(self.device)
         self.q_shift_target = QNetwork(state_size, action_size, self.seed).to(self.device)
@@ -28,7 +29,6 @@ class Agent():
         self.R_local = RNetwork(state_size,action_size, self.seed).to(self.device)
         self.R_target = RNetwork(state_size, action_size, self.seed).to(self.device)
         self.predicter = Classifier(state_size, action_dim, self.seed).to(self.device)
-        #self.criterion = nn.CrossEntropyLoss()
         # optimizer
         self.optimizer_q_shift = optim.Adam(self.q_shift_local.parameters(), lr=self.lr)
         self.optimizer_q = optim.Adam(self.Q_local.parameters(), lr=self.lr)
@@ -37,6 +37,7 @@ class Agent():
         pathname = "lr {} batch_size {} seed {}".format(self.lr, self.batch_size, self.seed)
         tensorboard_name = str(config["locexp"]) + '/runs/' + pathname 
         self.writer = SummaryWriter(tensorboard_name)
+        self.average_prediction = deque(maxlen=100)
         self.steps = 0
         self.ratio = 1. / action_dim
         self.all_actions = []
@@ -50,10 +51,10 @@ class Agent():
         states, next_states, actions = memory.expert_policy(self.batch_size)
         # actions = actions[0]
         # print("states ",  states)
-        self.state_action_frq(states, actions)
-        return 
+        # self.state_action_frq(states, actions)
         self.compute_shift_function(next_states, actions)
         self.compute_r_function(states, actions)
+        return 
         self.compute_q_function(states, next_states, actions)
         # update local nets 
         self.soft_update(self.Q_local, self.Q_target)
@@ -62,17 +63,35 @@ class Agent():
         return
 
 
+    def learn_predicter(self, memory):
+        """
+        
+        """
+        states, next_states, actions = memory.expert_policy(self.batch_size)
+        self.state_action_frq(states, actions)
+
+        
     def test_predicter(self, memory):
         """
         
         """
-        states, next_states, actions = memory.expert_policy(1)
-        output = self.predicter(states.unsqueeze(0))
-        # create one hot encode y from actions
-        y = actions.type(torch.long)
-        print("sum  out ", torch.sum(output))
-        print("compare pred {}  real {} ".format(output, y))
-        print("compare pred {}  real {} ".format(torch.argmax(output), y))
+        same_state_predition = 0
+        for i in range(100):
+            states, next_states, actions = memory.expert_policy(1)
+            output = self.predicter(states.unsqueeze(0))
+            # create one hot encode y from actions
+            y = actions.type(torch.long)[0][0].data
+            p =torch.argmax(output.data).data
+            if torch.equal(y,p):
+                same_state_predition += 1
+        self.average_prediction.append(same_state_predition)
+        average_pred = np.mean(self.average_prediction)
+        self.writer.add_scalar('Average prediction acc', average_pred, self.steps)
+
+        print("Same prediction {} of 100".format(same_state_predition))
+        #print("sum  out ", torch.sum(output))
+        #print("compare pred {}  real {} ".format(output, y))
+        #print("compare pred {}  real {} ".format(torch.argmax(output), y))
 
     def state_action_frq(self, states, action):
         """ Train classifer to compute state action freq
@@ -91,29 +110,32 @@ class Agent():
         self.optimizer_pre.step()
         self.writer.add_scalar('Predict_loss', loss, self.steps)
 
-
     def get_action_prob(self, states, actions, dim=False):
         """
 
         """
+        #actions = actions.type(torch.long).squeeze(1)
+        #actions = actions.unsqueeze(0)
+        # actions = actions.type(torch.long).view(-1)
+        actions = actions.type(torch.long)
+        
         # check if action prob is zero
+        """
         if dim:
-            output = self.predicter(states)
-            output = output.detach() +  torch.finfo(torch.float32).eps
-            action_prob = output.gather(1, actions.type(torch.long))
-            nx = action_prob.detach().cpu().numpy()
-            if np.where(nx <= 0) == 0:
-                print("single2", action_prob)
+            output = self.predicter(states.unsqueeze(0))
+            action_prob = output.gather(1, actions)
+            action_prob = action_prob.detach() + torch.finfo(torch.float32).eps
             action_prob = torch.log(action_prob)
             return action_prob
-        output = self.predicter(states)
-        output = output.detach() +   torch.finfo(torch.float32).eps
-        action_prob = output.gather(1, actions.type(torch.long))
-        nx = action_prob.detach().cpu().numpy()
+        """
+        output = self.predicter(states.unsqueeze(0))
+        output = output.squeeze(0)
+        # print("output shape ", output.shape)
+        # print("action shape ", actions.shape)
+        action_prob = output.gather(1, actions)
+        action_prob = action_prob.detach() + torch.finfo(torch.float32).eps
+        # print("action_prob ", action_prob.shape)
         action_prob = torch.log(action_prob)
-        s = np.where(nx <= 0)
-        if s[0].shape[0] != 0:
-            print("single2", action_prob)
         return action_prob
 
     def compute_q_function(self, states, next_states,  actions):
@@ -253,14 +275,39 @@ class Agent():
 
         print("expert action ", actions)
         print("inverse action ", best_action)
-        print("Q values ", q_values)
-
+        print("Q values a0 {} a1 {} a2{} a3 {} ".format(q_values[0][0][0].data,0,0,0))
 
     def save(self, filename):
+        """
+        
+        """
+        mkdir("", filename)
         torch.save(self.predicter.state_dict(), filename + "_predicter.pth")
         torch.save(self.optimizer_pre.state_dict(), filename + "_predicter_optimizer.pth")
+        print("save models to {}".format(filename))
+    
+    
+    
+    def load(self, filename):
+        """
+        
+        """
+        self.predicter.load_state_dict(torch.load(filename + "_predicter.pth"))
+        self.optimizer_pre.load_state_dict(torch.load(filename + "_predicter_optimizer.pth"))
 
 
+def mkdir(base, name):
+    """
+    Creates a direction if its not exist
+    Args:
+       param1(string): base first part of pathname
+       param2(string): name second part of pathname
+    Return: pathname 
+    """
+    path = os.path.join(base, name)
+    if not os.path.exists(path):
+        os.makedirs(path)
+    return path
 
 
 

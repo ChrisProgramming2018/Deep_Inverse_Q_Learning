@@ -1,8 +1,10 @@
 {
   "env_name": "LunarLander-v2",
   "locexp": "test",
-  "lr":0.001,
-  "episodes": 1000000,
+  "lr":0.7,
+  "episodes": 100000,
+  "predicter_time_steps": 100000,
+  "train_predicter": 0,
   "gamma":0.618,
   "decay":0.01,
   "min_epsilon":0.01,
