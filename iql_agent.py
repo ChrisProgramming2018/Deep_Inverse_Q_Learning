@@ -20,7 +20,7 @@ class Agent():
         self.seed = 0
         self.device = 'cuda'
         self.batch_size = config["batch_size"]
-        self.lr = 0.005
+        self.lr = config["lr"]
         self.gamma = 0.99
         self.q_shift_local = QNetwork(state_size, action_size, self.seed).to(self.device)
         self.q_shift_target = QNetwork(state_size, action_size, self.seed).to(self.device)
@@ -40,21 +40,41 @@ class Agent():
         self.average_prediction = deque(maxlen=100)
         self.average_same_action = deque(maxlen=100)
         self.steps = 0
-        self.ratio = 1. / action_dim
+        self.a0 = 0
+        self.a1 = 1
+        self.a2 = 2
+        self.a3 = 3
+        self.ratio = 1. / (action_dim - 1)
         self.all_actions = []
         for a in range(self.action_dim):
             action = torch.Tensor(1) * 0 +  a
             self.all_actions.append(action.to(self.device))
 
+    def debug(self, actions):
 
-    
+        if actions is None:
+            al = float(self.a0 + self.a1 + self.a2 + self.a3)
+            return [self.a0 /al , self.a1 /al, self.a2/al, self.a3/al]
+        if actions == 0:
+            self.a0 += 1
+        if actions == 1:
+            self.a1 += 1
+        if actions == 2:
+            self.a2 += 1
+        if actions == 3:
+            self.a3 += 1
+
     def learn(self, memory):
         states, next_states, actions = memory.expert_policy(self.batch_size)
         self.steps += 1
+        #print("  ")
+        #print("  ")
+        # print("current action", actions)
         # actions = actions[0]
+        #print("current action {}".format(actions[0][0].item()))
         # print("states ",  states)
-        # self.state_action_frq(states, actions)
-        self.compute_shift_function(next_states, actions)
+        self.state_action_frq(states, actions)
+        self.compute_shift_function(states, next_states, actions)
         self.compute_r_function(states, actions)
         self.compute_q_function(states, next_states, actions)
         # update local nets 
@@ -101,6 +121,8 @@ class Agent():
         output = self.predicter(states.unsqueeze(0))
         output = output.squeeze(0)
         #print("out shape", output.shape)
+        #print("state action prediction", output[0])
+        #print("max prediction", torch.argmax(output[0]).item())
         # create one hot encode y from actions
         
         y = action.type(torch.long).squeeze(1)
@@ -134,15 +156,20 @@ class Agent():
         # print("output shape ", output.shape)
         # print("action shape ", actions.shape)
         action_prob = output.gather(1, actions)
+        #print("action pob old {} ".format(action_prob, actions))
         action_prob = action_prob.detach() + torch.finfo(torch.float32).eps
-        # print("action_prob ", action_prob.shape)
+        #print("action_prob ", action_prob.shape)
+        #print("action pob {} ".format(action_prob, actions))
         action_prob = torch.log(action_prob)
+        # print("action log {:2f} of action {} ".format(action_prob.item(), actions.item()))
         return action_prob
 
     def compute_q_function(self, states, next_states,  actions):
         """
         
         """
+        #print("")
+        #print("update q function")
         actions = actions.type(torch.float)
         q_est = self.Q_local(states, actions)
         r_pre = self.R_target(states, actions)
@@ -150,11 +177,15 @@ class Agent():
         for idx, s in enumerate(next_states):
             q = []
             for action in self.all_actions:
-                q.append(self.Q_target(s.unsqueeze(0), action.unsqueeze(0)))
+                res =  self.Q_target(s.unsqueeze(0), action.unsqueeze(0))
+                q.append(res)
+                # print("action {} : q {} ".format(action.item(), res.item()))
             q_max = max(q)
             q_hat[idx]=  q_max
         q_hat *= self.gamma
         q_target = r_pre + q_hat
+        #print("q pre ", q_est)
+        #print("q target ", q_target)
         q_loss = F.mse_loss(q_est, q_target)
         # Minimize the loss
         self.optimizer_q.zero_grad()
@@ -167,13 +198,13 @@ class Agent():
 
 
 
-    def compute_shift_function(self, next_states,  actions):
+    def compute_shift_function(self, states, next_states,  actions):
         """
         
         """
         # compute difference between Q_shift and y_sh
         actions = actions.type(torch.float)
-        q_sh_value = self.q_shift_local(next_states, actions)
+        q_sh_value = self.q_shift_local(states, actions)
         y_sh =  torch.empty((self.batch_size, 1), dtype=torch.float32).to(self.device)
         for idx, s in enumerate(next_states):
             q = []
@@ -200,7 +231,7 @@ class Agent():
         y = self.R_local(states, actions)
         y_shift = self.q_shift_target(states, actions)
         y_r_part1 = self.get_action_prob(states, actions) - y_shift
-        #print("ratio ", self.ratio)
+        #print("n_a ", y_r_part1)
         # sum all other actions
         y_r_part2 =  torch.empty((self.batch_size, 1), dtype=torch.float32).to(self.device)
         idx = 0
@@ -209,17 +240,27 @@ class Agent():
             for b in self.all_actions:
                 if torch.eq(a, b):
                     continue
-                #print("diff ac ", b)
+                # print("diff ac ", b)
                 r_hat = self.R_target(s.unsqueeze(0), b.unsqueeze(0))
+                #print("r hat ", r_hat)
                 n_b = self.get_action_prob(s.unsqueeze(0), b.unsqueeze(0), True) - self.q_shift_target(s.unsqueeze(0), b.unsqueeze(0))
+                #print("action", b)
+                #print("n_b hat ", n_b )
                 y_h += (r_hat - n_b)
-            y_h = self.ratio * y_h
-            y_r_part2[idx] = y_h
+            #print("ratio", self.ratio)
+            #y_h = self.ratio * y_h
+            #print("y_h", y_h)
+            y_r_part2[idx] = self.ratio * y_h
             idx += 1
-        # print("shape of r y ", y.shape)
-        # print("y r part 1 ", y_r_part1.shape)
-        # print("y r part 2 ", y_r_part2.shape)
+        #print("shape of r y ", y.shape)
+        #print("action ", actions)
+        #print("na part 1 ", y_r_part1)
+        #print("sum part 2 ", y_r_part2)
+        #sys.exit()
+        #print("Update reward for action ", actions.item())
+        #print("predict ", y)
         y_r = y_r_part1 + y_r_part2
+        #print("target ", y_r)
         r_loss = F.mse_loss(y, y_r)
         # Minimize the loss
         self.optimizer_r.zero_grad()
@@ -253,7 +294,12 @@ class Agent():
             state = env.reset()
             while True:
                 action = self.act(state)
+                state = torch.Tensor(state).to(self.device)
+                for a in self.all_actions:
+                    print("q function ", self.Q_local(state.unsqueeze(0), a.unsqueeze(0)))
+                print("action", action)
                 next_state, reward, done, _ = env.step(action)
+                state = next_state
                 score += reward
                 env.render()
                 if done:
@@ -274,10 +320,13 @@ class Agent():
             for a in self.all_actions:
                 q_values.append(self.Q_local(states, a.unsqueeze(0)))
             best_action = np.argmax(q_values)
+            self.debug(best_action)
             if  actions[0][0].item() == best_action:
                 same_action += 1
         print("    ")
-        print("Q values a0: {:.2f} a1: {:.2f} a2: {:.2f} a3: {:.2f}".format(q_values[0][0][0].data, q_values[1][0][0].data, q_values[2][0][0].data, q_values[2][0][0].data))
+        al = self.debug(None)
+        print("inverse action a0: {:.2f} a1: {:.2f} a2: {:.2f} a3: {:.2f}".format(al[0], al[1], al[2], al[3]))
+        print("Q values a0: {:.2f} a1: {:.2f} a2: {:.2f} a3: {:.2f}".format(q_values[0][0][0].data, q_values[1][0][0].data, q_values[2][0][0].data, q_values[3][0][0].data))
         print("same action {} of 100".format(same_action))
         self.average_same_action.append(same_action)
         av_action = np.mean(self.average_same_action)
@@ -290,6 +339,10 @@ class Agent():
         mkdir("", filename)
         torch.save(self.predicter.state_dict(), filename + "_predicter.pth")
         torch.save(self.optimizer_pre.state_dict(), filename + "_predicter_optimizer.pth")
+        torch.save(self.Q_local.state_dict(), filename + "_q_net.pth")
+        torch.save(self.optimizer_q.state_dict(), filename + "_q_net_optimizer.pth")
+        torch.save(self.q_shift_local.state_dict(), filename + "_q_shift_net.pth")
+        torch.save(self.optimizer_q_shift.state_dict(), filename + "_q_shift_net_optimizer.pth")
         print("save models to {}".format(filename))
     
     

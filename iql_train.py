@@ -23,15 +23,16 @@ def train(env, config):
         agent.save("pytorch_models/")
         return
     else:
-        agent.load("pytorch_models/")
+        # agent.load("pytorch_models/")
         print("continue load predicter model")
     
 
     
-    for i_episode in range(config['episodes']):
+    for i_episode in range(1, config['episodes']):
         text = "Inverse Episode {}  \ {} \r".format(i_episode, config["episodes"])
         print(text, end = '')
         agent.learn(memory)
-        if i_episode % 500 == 0:
-            # agent.eval_policy(env)
+        if i_episode % 50 == 0:
+            agent.eval_policy(env)
             agent.test_q_value(memory)
+    agent.save("pytorch_models/")
