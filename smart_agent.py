@@ -28,7 +28,7 @@ for i_episode in range(1, n_episodes+1):
         score += reward
         memory.add(state, action, reward, next_state, done, done)
         state = next_state
-        env.render()
+        # env.render()
         if done:
             print("Episode {}  Reward {}".format(i_episode, score))
             break

@@ -36,4 +36,4 @@ def train(env, config):
             agent.eval_policy(env)
             agent.test_q_value(memory)
             agent.test_predicter(memory)
-            agent.save("pytorch_models/")
+            agent.save("pytorch_models/-{}".format(i_episode))

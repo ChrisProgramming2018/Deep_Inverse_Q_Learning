@@ -82,4 +82,3 @@ class Classifier(nn.Module):
         x = F.relu(self.fc2(x))
         output = self.fc3(x)
         return output
-        return F.softmax(output, dim=2)

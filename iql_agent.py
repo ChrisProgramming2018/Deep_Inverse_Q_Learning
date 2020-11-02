@@ -2,6 +2,8 @@ import os
 import sys
 import numpy as np
 import random
+import gym
+import gym.wrappers
 from collections import namedtuple, deque
 from models import QNetwork, RNetwork, Classifier
 import torch
@@ -10,10 +12,18 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 from torch.autograd import Variable
+torch.set_printoptions(threshold=5000)
+import logging
+ 
+ 
+logging.basicConfig(filename="test.log", level=logging.DEBUG)
+
+
 
 
 class Agent():
     def __init__(self, state_size, action_size, action_dim, config):
+        self.env_name = config["env_name"]
         self.state_size = state_size
         self.action_size = action_size
         self.action_dim = action_dim
@@ -163,13 +173,12 @@ class Agent():
         #print("action shape ", actions.shape)
         action_prob = output.gather(1, actions)
         #print("action pob old {} ".format(action_prob, actions))
-        # action_prob = action_prob.detach() + torch.finfo(torch.float32).eps
+        action_prob = action_prob.detach() + torch.finfo(torch.float32).eps
+        logging.debug("action_prob {})".format(action_prob))
         #print("action_prob ", action_prob.shape)
         #print("action pob {} ".format(action_prob, actions))
         action_prob = torch.log(action_prob)
-        if torch.isnan(action_prob).any():
-            print(output)
-            sys.exit()
+        
         # print("action log {:2f} of action {} ".format(action_prob.item(), actions.item()))
         return action_prob
 
@@ -192,10 +201,15 @@ class Agent():
         #print("q pre ", q_est.shape)
         #print("q target ", target_Q.shape)
         q_loss = F.mse_loss(q_est, target_Q)
+        if torch.isnan(q_loss).any():
+            print("q_est", q_est)
+            print("r_est", r_pre)
+            print("target", Q_target_next)
+
         # Minimize the loss
         self.optimizer_q.zero_grad()
         q_loss.backward()
-        #torch.nn.utils.clip_grad_norm_(self.Q_local.parameters(), 1)
+        torch.nn.utils.clip_grad_norm_(self.Q_local.parameters(), 1)
         self.optimizer_q.step()
         self.writer.add_scalar('Q_loss', q_loss, self.steps)
         #print("q update")
@@ -222,7 +236,7 @@ class Agent():
         # Minimize the loss
         self.optimizer_q_shift.zero_grad()
         q_shift_loss.backward()
-        # torch.nn.utils.clip_grad_norm_(self.q_shift_local.parameters(), 1)
+        torch.nn.utils.clip_grad_norm_(self.q_shift_local.parameters(), 1)
         self.optimizer_q_shift.step()
         # print("q shift update")
 
@@ -271,7 +285,7 @@ class Agent():
         # Minimize the loss
         self.optimizer_r.zero_grad()
         r_loss.backward()
-        # torch.nn.utils.clip_grad_norm_(self.R_local.parameters(), 1)
+        torch.nn.utils.clip_grad_norm_(self.R_local.parameters(), 1)
         self.optimizer_r.step()
         self.writer.add_scalar('Reward_loss', r_loss, self.steps)
 
@@ -291,6 +305,11 @@ class Agent():
         return action.item()
 
     def eval_policy(self, env, episode=2):
+        pathname = "videos/time_steps-{}/".format(self.steps)
+        mkdir("", pathname)
+        env = gym.make(self.env_name)
+        env.metadata["render.modes"] = ["human", "rgb_array"]
+        env = gym.wrappers.Monitor(env=env, directory=pathname, force=True)
         scores = 0
         for i_episode in range(episode):
             score = 0
@@ -309,6 +328,7 @@ class Agent():
         env.close()
         scores /= episode
         print("Average score {}".format(scores))
+        self.writer.add_scalar('Eval_policy', scores, self.steps)
 
 
 
@@ -322,9 +342,10 @@ class Agent():
             if  actions[0][0].item() == best_action:
                 same_action += 1
             else:
-                print("Action expert ", actions[0][0].item())
-                print("Q values ", q_values)
-                print("Action prob ",  self.predicter(states.unsqueeze(0)))
+                pass
+                #print("Action expert ", actions[0][0].item())
+                #print("Q values ", q_values)
+                #print("Action prob ",  self.predicter(states.unsqueeze(0)))
         print("    ")
         al = self.debug(None)
         print("inverse action a0: {:.2f} a1: {:.2f} a2: {:.2f} a3: {:.2f}".format(al[0], al[1], al[2], al[3]))
