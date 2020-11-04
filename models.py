@@ -60,7 +60,7 @@ class QNetwork(nn.Module):
 class Classifier(nn.Module):
     """ Classifier Model."""
 
-    def __init__(self, state_size, action_dim, seed, fc1_units=128, fc2_units=128):
+    def __init__(self, state_size, action_dim, seed, fc1_units=256*4, fc2_units=256*4):
         """Initialize parameters and build model.
         Params
         ======
@@ -75,10 +75,16 @@ class Classifier(nn.Module):
         self.fc1 = nn.Linear(state_size, fc1_units)
         self.fc2 = nn.Linear(fc1_units, fc2_units)
         self.fc3 = nn.Linear(fc2_units, action_dim)
+        self.bn1 = nn.BatchNorm1d(fc1_units)
+        self.bn2 = nn.BatchNorm1d(fc2_units)
 
-    def forward(self, state):
+    def forward(self, state, train=False, stats=False):
         """Build a network that maps state -> action values."""
         x = F.relu(self.fc1(state))
+        x = self.bn1(x)
+        x = F.dropout(x,training=train)
         x = F.relu(self.fc2(x))
+        x = self.bn2(x)
+        x = F.dropout(x,training=train)
         output = self.fc3(x)
         return output

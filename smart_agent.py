@@ -4,7 +4,7 @@ import torch
 import numpy as np
 from dqn_agent import DQNAgent
 from replay_buffer2 import ReplayBuffer
-
+from iql_agent import mkdir
 
 env = gym.make('LunarLander-v2')
 env.seed(0)
@@ -23,7 +23,6 @@ for i_episode in range(1, n_episodes+1):
     score = 0
     for t in range(max_t):
         action = agent.act(state, eps)
-        print("action", action)
         next_state, reward, done, _ = env.step(action)
         score += reward
         memory.add(state, action, reward, next_state, done, done)
@@ -33,7 +32,7 @@ for i_episode in range(1, n_episodes+1):
             print("Episode {}  Reward {}".format(i_episode, score))
             break
 
-
+mkdir("","expert_policy")
 print("save memory ...")
 memory.save_memory("expert_policy")
 print("... memory saved")

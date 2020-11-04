@@ -13,6 +13,9 @@ def main(args):
         param = json.load(f)
     print("use the env {} ".format(param["env_name"]))
     print(param)
+    print("Start Programm in {}  mode".format(args.mode))
+    param["mode"] = args.mode
+    param["lr_pre"] = args.lr_pre
     env = gym.make(param["env_name"])
 
     train(env, param)
@@ -29,6 +32,7 @@ if __name__ == "__main__":
     parser.add_argument('--lr_iql_q', default=1e-3, type=float)
     parser.add_argument('--lr_iql_r', default=1e-3, type=float)
     parser.add_argument('--lr_q_sh', default=1e-3, type=float)
+    parser.add_argument('--lr_pre', default=1e-3, type=float)
     parser.add_argument('--freq_q', default=1, type=int)
     parser.add_argument('--mode', default="train q table", type=str)
     arg = parser.parse_args()
