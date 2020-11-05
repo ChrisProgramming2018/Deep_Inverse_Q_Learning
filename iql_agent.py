@@ -44,7 +44,7 @@ class Agent():
         # optimizer
         self.optimizer_q_shift = optim.Adam(self.q_shift_local.parameters(), lr=self.lr)
         self.optimizer_q = optim.Adam(self.Q_local.parameters(), lr=self.lr)
-        self.optimizer_r = optim.Adam(self.R_local.parameters(), lr=self.lr)
+        self.optimizer_r = optim.Adam(self.R_local.parameters(), lr=0.001)
         self.optimizer_pre = optim.Adam(self.predicter.parameters(), lr=self.lr_pre)    
         pathname = "lr {} batch_size {} seed {}".format(self.lr, self.batch_size, self.seed)
         tensorboard_name = str(config["locexp"]) + '/runs/' + pathname 
@@ -62,7 +62,7 @@ class Agent():
         for a in range(self.action_dim):
             action = torch.Tensor(1) * 0 +  a
             self.all_actions.append(action.to(self.device))
-
+        self.debug_max = 10
     def debug(self, actions):
 
         if actions is None:
@@ -82,7 +82,8 @@ class Agent():
         self.steps += 1
         self.state_action_frq(states, actions)
         self.compute_shift_function(states, next_states, actions)
-        self.compute_r_function(states, actions)
+        for i in range(10):
+            self.compute_r_function(states, actions)
         self.compute_q_function(states, next_states, actions, dones)
         # update local nets 
         self.soft_update(self.Q_local, self.Q_target)
@@ -112,10 +113,10 @@ class Agent():
             # create one hot encode y from actions
             y = actions.type(torch.long)[0][0].data
             p =torch.argmax(output.data).data
-            print("expert ", y)
-            print("q ", output.data)
             if torch.equal(y,p):
                 same_state_predition += 1
+                print("expert ", y)
+                print("q ", output.data)
         self.average_prediction.append(same_state_predition)
         average_pred = np.mean(self.average_prediction)
         self.writer.add_scalar('Average prediction acc', average_pred, self.steps)
@@ -152,7 +153,7 @@ class Agent():
         output = F.softmax(output, dim=1)
         # output = output.squeeze(0)
         action_prob = output.gather(1, actions)
-        action_prob = action_prob.detach() + torch.finfo(torch.float32).eps
+        # action_prob = action_prob.detach() + torch.finfo(torch.float32).eps
         logging.debug("action_prob {})".format(action_prob))
         action_prob = torch.log(action_prob)
         return action_prob
@@ -169,7 +170,6 @@ class Agent():
         #print(target_action)
         target_action = torch.argmax(target_action,dim=1)
         #print(target_action)
-        #print("action ", target_action.shape)
         Q_target_next = self.Q_target(next_states).gather(1, target_action.unsqueeze(0)).squeeze(0)
         #print("Q target", Q_target_next.shape)
         #print("r_pre ", r_pre.shape)
@@ -199,12 +199,13 @@ class Agent():
         
         actions = actions.type(torch.int64)
         q_sh_value = self.q_shift_local(states).gather(1, actions).squeeze(1)
-        target_Q = self.Q_target(next_states).detach().max(1)[0]
         
-        
-        
-        target_Q *= self.gamma 
-        q_shift_loss = F.mse_loss(q_sh_value, target_Q)
+        target_action = self.Q_local(next_states)
+        target_action = torch.argmax(target_action,dim=1)
+        shift_q_target_ = self.Q_target(next_states).gather(1, target_action.unsqueeze(0)).squeeze(0)
+          
+        shift_q_target_ = self.gamma * shift_q_target_
+        q_shift_loss = F.mse_loss(q_sh_value, shift_q_target_)
         
         # Minimize the loss
         self.optimizer_q_shift.zero_grad()
@@ -219,10 +220,16 @@ class Agent():
         
         """
         actions = actions.type(torch.int64)
-        y = self.R_local(states).gather(1, actions).squeeze(1).unsqueeze(1)
+        #y = self.R_local(states).gather(1, actions).squeeze(1).unsqueeze(1)
+        y = self.R_local(states).gather(1, actions)
         y_shift = self.q_shift_target(states).gather(1, actions)
-        y_r_part1 = self.get_action_prob(states, actions) - y_shift
-        
+        log_a = self.get_action_prob(states, actions)
+
+        y_r_part1 = log_a - y_shift 
+        if debug:
+            print("y r {:.3f}".format(y.item()))
+            print("log a prob {:.3f}".format(log_a.item()))
+            print("n_a {:.3f}".format(y_r_part1.item()))
         # sum all other actions
         # print("state shape ", states.shape)
         size = states.shape[0]
@@ -238,28 +245,33 @@ class Agent():
                  
                 y_s = self.q_shift_target(s.unsqueeze(0)).gather(1, b)
                 n_b = self.get_action_prob(s.unsqueeze(0), b) - y_s
+                if debug:
+                    n_b = self.get_action_prob(s.unsqueeze(0), b) * 10  # debuging
+                    n_b = n_b - y_s 
+                
                 y_h += (r_hat - n_b)
+                if debug:
+                    print("action", b.item())
+                    print("r_pre {:.3f}".format(r_hat.item()))
+                    print("n_b {:.3f}".format(n_b.item()))
             y_r_part2[idx] = self.ratio * y_h
             idx += 1
-        if debug:
-            print("Correct action r ", y)
-            print("Correct action shift ", y_shift)
-            print("Correct action target ", y_r_part1)
-            print("part incorret action ", y_r_part2)
-        #print("Correct action target ", y_r_part1.shape)
-        #print("part incorret action ", y_r_part2.shape)
         y_r = y_r_part1 + y_r_part2
+        if debug:
+            print("Correct action p {:.3f} ".format(y.item()))
+            print("Correct action target {:.3f} ".format(y_r.item()))
+            #print("part incorret action {:.2f} ".format(y_r_part2.item()))
         r_loss = F.mse_loss(y, y_r)
         
         # Minimize the loss
         self.optimizer_r.zero_grad()
         r_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.R_local.parameters(), 1)
+        #torch.nn.utils.clip_grad_norm_(self.R_local.parameters(), 5)
         self.optimizer_r.step()
         self.writer.add_scalar('Reward_loss', r_loss, self.steps)
 
 
-    def soft_update(self, local_net, target_net, tau=1e-3):
+    def soft_update(self, local_net, target_net, tau=1e-4):
         """ swaps the network weights from the online to the target
         Args:
            param1 (float): tau
@@ -303,25 +315,30 @@ class Agent():
 
     def test_q_value(self, memory):
         same_action = 0
-        for i in range(100):
-            states, next_states, actions, dones = memory.expert_policy(1)
-            self.compute_r_function(states, actions, True)
+        for i in range(self.debug_max):
+            states = memory.obses[i]
+            next_states = memory.next_obses[i]
+            actions = memory.actions[i]
+            states = torch.as_tensor(states, device=self.device).unsqueeze(0)
+            next_states = torch.as_tensor(next_states, device=self.device)
+            actions = torch.as_tensor(actions, device=self.device)
             output = self.predicter(states, train=True)
             output = F.softmax(output, dim=1)
             q_values = self.Q_local(states)
             best_action = torch.argmax(q_values).item()
             self.debug(best_action)
-            if  actions[0][0].item() == best_action:
+            if  actions.item() == best_action:
                 same_action += 1
             else:
-                logging.debug("experte action  {} q fun {}".format(actions[0][0].item(), q_values))
+                logging.debug("experte action  {} q fun {}".format(actions.item(), q_values))
+                print("-------------------------------------------------------------------------------")
                 print("expert ", actions)
                 print("q", q_values.data)
                 print("a ", output.data)
-                
+                self.compute_r_function(states, actions.unsqueeze(0), True) 
         #al = self.debug(None)
         #print("inverse action a0: {:.2f} a1: {:.2f} a2: {:.2f} a3: {:.2f}".format(al[0], al[1], al[2], al[3]))
-        print("same action {} of 100".format(same_action))
+        print("same action {} of {}".format(same_action, self.debug_max))
         self.average_same_action.append(same_action)
         av_action = np.mean(self.average_same_action)
         self.writer.add_scalar('Average_same_action', av_action, self.steps)

@@ -1,4 +1,4 @@
-from replay_buffer2 import ReplayBuffer
+from replay_buffer import ReplayBuffer
 from iql_agent import Agent
 
 
