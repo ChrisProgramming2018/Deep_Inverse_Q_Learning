@@ -41,6 +41,10 @@ class Agent():
         self.R_local = RNetwork(state_size,action_dim, self.seed).to(self.device)
         self.R_target = RNetwork(state_size, action_dim, self.seed).to(self.device)
         self.predicter = Classifier(state_size, action_dim, self.seed).to(self.device)
+        self.soft_update(self.Q_local, self.Q_target, 1)
+        self.soft_update(self.q_shift_local, self.q_shift_target, 1)
+        self.soft_update(self.R_local, self.R_target, 1)
+         
         # optimizer
         self.optimizer_q_shift = optim.Adam(self.q_shift_local.parameters(), lr=self.lr)
         self.optimizer_q = optim.Adam(self.Q_local.parameters(), lr=self.lr)
@@ -80,10 +84,10 @@ class Agent():
     def learn(self, memory):
         states, next_states, actions, dones = memory.expert_policy(self.batch_size)
         self.steps += 1
-        self.state_action_frq(states, actions)
+        for i in range(3):
+            self.state_action_frq(states, actions)
         self.compute_shift_function(states, next_states, actions)
-        for i in range(10):
-            self.compute_r_function(states, actions)
+        self.compute_r_function(states, actions)
         self.compute_q_function(states, next_states, actions, dones)
         # update local nets 
         self.soft_update(self.Q_local, self.Q_target)
@@ -158,13 +162,16 @@ class Agent():
         action_prob = torch.log(action_prob)
         return action_prob
 
-    def compute_q_function(self, states, next_states,  actions, dones):
+    def compute_q_function(self, states, next_states,  actions, dones, debug=False):
         """
         
         """
+        self.Q_local.train()
+        #print("ac", actions.shape)
+        #print("s", states.shape)
+        #print("ns", next_states.shape)
         actions = actions.type(torch.int64)
         q_est = self.Q_local(states).gather(1, actions).squeeze(1)
-        #print("Q est", q_est.shape)
         r_pre = self.R_target(states).gather(1, actions).squeeze(1)
         target_action = self.Q_local(next_states)
         #print(target_action)
@@ -174,6 +181,15 @@ class Agent():
         #print("Q target", Q_target_next.shape)
         #print("r_pre ", r_pre.shape)
         target_Q = r_pre + (self.gamma * Q_target_next) 
+        if debug:
+            print("---------------q_update------------------")
+            print("expet action ", actions.item())
+            print("q est {}".format(self.Q_local(states)))
+            print("q for a {}".format(q_est))
+            print("re  est {}".format( self.R_target(states)))
+            print("re for a {}".format(r_pre))
+            print("q next {}".format(self.Q_target(next_states)))
+            print("q target {}".format(target_Q))
         
         #print("final target shape", target_Q.shape)
         #print("q est", q_est.shape)
@@ -187,6 +203,7 @@ class Agent():
         torch.nn.utils.clip_grad_norm_(self.Q_local.parameters(), 1)
         self.optimizer_q.step()
         self.writer.add_scalar('Q_loss', q_loss, self.steps)
+        self.Q_local.eval()
 
 
 
@@ -227,6 +244,7 @@ class Agent():
 
         y_r_part1 = log_a - y_shift 
         if debug:
+            print("expet action ", actions.item())
             print("y r {:.3f}".format(y.item()))
             print("log a prob {:.3f}".format(log_a.item()))
             print("n_a {:.3f}".format(y_r_part1.item()))
@@ -246,7 +264,7 @@ class Agent():
                 y_s = self.q_shift_target(s.unsqueeze(0)).gather(1, b)
                 n_b = self.get_action_prob(s.unsqueeze(0), b) - y_s
                 if debug:
-                    n_b = self.get_action_prob(s.unsqueeze(0), b) * 10  # debuging
+                    n_b = self.get_action_prob(s.unsqueeze(0), b)  # debuging
                     n_b = n_b - y_s 
                 
                 y_h += (r_hat - n_b)
@@ -271,7 +289,7 @@ class Agent():
         self.writer.add_scalar('Reward_loss', r_loss, self.steps)
 
 
-    def soft_update(self, local_net, target_net, tau=1e-4):
+    def soft_update(self, local_net, target_net, tau=1e-3):
         """ swaps the network weights from the online to the target
         Args:
            param1 (float): tau
@@ -319,9 +337,11 @@ class Agent():
             states = memory.obses[i]
             next_states = memory.next_obses[i]
             actions = memory.actions[i]
+            dones = memory.not_dones[i]
             states = torch.as_tensor(states, device=self.device).unsqueeze(0)
             next_states = torch.as_tensor(next_states, device=self.device)
             actions = torch.as_tensor(actions, device=self.device)
+            dones = torch.as_tensor(dones, device=self.device)
             output = self.predicter(states, train=True)
             output = F.softmax(output, dim=1)
             q_values = self.Q_local(states)
@@ -336,6 +356,7 @@ class Agent():
                 print("q", q_values.data)
                 print("a ", output.data)
                 self.compute_r_function(states, actions.unsqueeze(0), True) 
+                self.compute_q_function(states, next_states.unsqueeze(0), actions.unsqueeze(0), dones, True) 
         #al = self.debug(None)
         #print("inverse action a0: {:.2f} a1: {:.2f} a2: {:.2f} a3: {:.2f}".format(al[0], al[1], al[2], al[3]))
         print("same action {} of {}".format(same_action, self.debug_max))

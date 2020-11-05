@@ -1,6 +1,6 @@
 from replay_buffer import ReplayBuffer
 from iql_agent import Agent
-
+import sys
 
 
 
@@ -12,6 +12,9 @@ def train(env, config):
     memory.load_memory(config["buffer_path"])
     agent = Agent(8, 1, 4, config)
     memory.idx = 10
+    #for i in range(10):
+    #    print("state", memory.obses[i])
+    # sys.exit()
     print("memroy idx ",memory.idx)
     if config["mode"] == "predict": 
         for t in range(config["predicter_time_steps"]):
