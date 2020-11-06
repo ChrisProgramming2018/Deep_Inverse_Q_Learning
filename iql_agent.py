@@ -238,7 +238,7 @@ class Agent():
         self.soft_update(self.R_local, self.R_target)
         self.R_local.eval()
     
-    def compute_q_function(self, states, next_states, actions, dones):
+    def compute_q_function(self, states, next_states, actions, dones, debug=False):
         """Update value parameters using given batch of experience tuples.
         Params
         ======
@@ -253,6 +253,7 @@ class Agent():
         rewards = r_pre = self.R_target(states).gather(1, actions).squeeze(1)
         Q_targets = rewards + (self.gamma * Q_targets_next * (1 - dones))
 
+
         # Get expected Q values from local model
         Q_expected = self.qnetwork_local(states).gather(1, actions)
 
@@ -262,6 +263,17 @@ class Agent():
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
+        if debug:
+            print("---------------q_update------------------")
+            print("expet action ", actions.item())
+            print("q est {}".format(self.qnetwork_local(states)))
+            print("q for a {}".format(Q_expected))
+            print("re  est {}".format( self.R_target(states)))
+            print("re for a {}".format(rewards))
+            print("q next {}".format(self.qnetwork_target(next_states)))
+            print("q target {}".format(Q_targets.item()))
+            print("q loss {}".format(loss.item()))
+
 
         # ------------------- update target network ------------------- #
         self.soft_update(self.qnetwork_local, self.qnetwork_target)
@@ -364,7 +376,8 @@ class Agent():
 
     def test_q_value(self, memory):
         same_action = 0
-        for i in range(10):
+        test_elements = 10
+        for i in range(test_elements):
             states = memory.obses[i]
             next_states = memory.next_obses[i]
             actions = memory.actions[i]
@@ -383,13 +396,14 @@ class Agent():
                 # logging.debug("experte action  {} q fun {}".format(actions.item(), q_values))
                 print("-------------------------------------------------------------------------------")
                 print("expert ", actions)
-                print("q", q_values.data)
-                print("a ", output.data)
+                print("q values", q_values.data)
+                print("action prob predicter  ", output.data)
                 self.compute_r_function(states, actions.unsqueeze(0), True)
-                self.compute_q_function(states, next_states.unsqueeze(0), actions.unsqueeze(0), dones)
+                self.compute_q_function(states, next_states.unsqueeze(0), actions.unsqueeze(0), dones, True)
         self.average_same_action.append(same_action)
         av_action = np.mean(self.average_same_action)
         self.writer.add_scalar('Average_same_action', av_action, self.steps)
+        print("Same actions {}  of {}".format(same_action, test_elements))
 
 
     def soft_update(self, local_model, target_model):
