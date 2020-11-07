@@ -34,7 +34,7 @@ if __name__ == "__main__":
     parser.add_argument('--lr_q_sh', default=1e-4, type=float)
     parser.add_argument('--lr_pre', default=1e-4, type=float)
     parser.add_argument('--freq_q', default=1, type=int)
-    parser.add_argument('--mode', default="train q table", type=str)
+    parser.add_argument('--mode', default="iql", type=str)
     arg = parser.parse_args()
     mkdir("", arg.locexp)
     main(arg)
