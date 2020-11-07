@@ -1,13 +1,14 @@
 {
   "env_name": "LunarLander-v2",
   "locexp": "test",
-  "lr": 0.0001,
+  "lr": 5e-4,
+  "tau": 1e-3,
   "episodes": 10000000,
   "predicter_time_steps": 100000,
   "train_predicter": 0,
   "buffer_size": 100000,
   "expert_buffer_size": 20000,
-  "batch_size": 32,
+  "batch_size": 256,
   "buffer_path": "expert_policy",
   "device": "cuda"
 }

@@ -11,7 +11,7 @@ def train(env, config):
     """
     memory = ReplayBuffer((8,), (1,), config["expert_buffer_size"], config["device"])
     memory.load_memory(config["buffer_path"])
-    memory.idx = 1
+    memory.idx = 100
     agent = Agent(state_size=8, action_size=4,  config=config) 
     
     #for i in range(10):
@@ -30,13 +30,13 @@ def train(env, config):
 
     
     if config["mode"] == "iql":
-        agent.load("pytorch_models-{trained_predicter}/")
+        agent.load("pytorch_models-{trained_predicter}-100/")
         agent.test_predicter(memory)
         for t in range(config["predicter_time_steps"]):
             text = "Train IQL {}  \ {} \r".format(t, config["predicter_time_steps"])
             print(text, end = '')
             agent.learn(memory)
-            if t % 100 == 0:
+            if t % 1 == 0:
                 agent.test_q_value(memory)
 
 

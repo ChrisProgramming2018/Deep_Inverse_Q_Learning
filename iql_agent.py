@@ -14,7 +14,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.autograd import Variable
 torch.set_printoptions(threshold=5000)
 import logging
-
+from datetime import datetime
 
 logging.basicConfig(filename="test.log", level=logging.DEBUG)
 
@@ -39,17 +39,17 @@ class Agent():
         self.gamma = 0.99
         self.qnetwork_local = QNetwork(state_size, action_size, self.seed).to(self.device)
         self.qnetwork_target = QNetwork(state_size, action_size, self.seed).to(self.device)
-        self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=5e-4)
+        self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=self.lr)
         self.soft_update(self.qnetwork_local, self.qnetwork_target, 1)
         
         self.q_shift_local = QNetwork(state_size, action_size, self.seed).to(self.device)
         self.q_shift_target = QNetwork(state_size, action_size, self.seed).to(self.device)
-        self.optimizer_shift = optim.Adam(self.q_shift_local.parameters(), lr=5e-4)
+        self.optimizer_shift = optim.Adam(self.q_shift_local.parameters(), lr=self.lr)
         self.soft_update(self.q_shift_local, self.q_shift_target, 1)
          
         self.R_local = QNetwork(state_size, action_size, self.seed).to(self.device)
         self.R_target = QNetwork(state_size, action_size, self.seed).to(self.device)
-        self.optimizer_r = optim.Adam(self.R_local.parameters(), lr=5e-4)
+        self.optimizer_r = optim.Adam(self.R_local.parameters(), lr=self.lr)
         self.soft_update(self.R_local, self.R_target, 1)
         
         self.memory = Memory(action_size, config["buffer_size"], self.batch_size, self.seed, self.device)
@@ -58,6 +58,9 @@ class Agent():
         self.predicter = Classifier(state_size, action_size, self.seed).to(self.device)
         self.optimizer_pre = optim.Adam(self.predicter.parameters(), lr=self.lr_pre)
         pathname = "lr {} batch_size {} seed {}".format(self.lr, self.batch_size, self.seed)
+        now = datetime.now()    
+        dt_string = now.strftime("%d_%m_%Y_%H:%M:%S")
+        pathname += dt_string
         tensorboard_name = str(config["locexp"]) + '/runs/' + pathname
         self.writer = SummaryWriter(tensorboard_name)
         print("summery writer ", tensorboard_name)
@@ -133,7 +136,7 @@ class Agent():
         #logging.debug("Same prediction {} of 100".format(same_state_predition))
         text = "Same prediction {} of {} ".format(same_state_predition, memory.idx)
         print(text)
-        self.writer.add_scalar('Action prediction acc', same_state_predition, self.steps)
+        # self.writer.add_scalar('Action prediction acc', same_state_predition, self.steps)
         self.predicter.train()
 
 
@@ -147,12 +150,12 @@ class Agent():
         # output = output.squeeze(0)
         action_prob = output.gather(1, actions)
         if predict:
-            if action_prob.item() < 1e-4:
+            if action_prob.item() < 1e-3:
                 return None
         action_prob = action_prob + torch.finfo(torch.float32).eps
         # logging.debug("action_prob {})".format(action_prob))
         action_prob = torch.log(action_prob)
-        torch.nn.utils.clip_grad_norm_(action_prob, -1)
+        action_prob = torch.clamp(action_prob, min=-3, max=0)
         return action_prob
 
     def compute_shift_function(self, states, next_states, actions, dones):
@@ -216,7 +219,7 @@ class Agent():
                     n_b = n_b - y_s
 
                     y_h += (r_hat - n_b)
-                    if debug and False:
+                    if debug:
                         print("action", b.item())
                         print("r_pre {:.3f}".format(r_hat.item()))
                         print("n_b {:.3f}".format(n_b.item()))
@@ -267,6 +270,7 @@ class Agent():
         if debug:
             print("---------------q_update------------------")
             print("expet action ", actions.item())
+            print("state ", states)
         
         with torch.no_grad():
             # Get max predicted Q values (for next states) from target model
@@ -407,7 +411,7 @@ class Agent():
 
     def test_q_value(self, memory):
         same_action = 0
-        test_elements = 1
+        test_elements = memory.idx
         for i in range(test_elements):
             states = memory.obses[i]
             next_states = memory.next_obses[i]
@@ -417,26 +421,39 @@ class Agent():
             next_states = torch.as_tensor(next_states, device=self.device)
             actions = torch.as_tensor(actions, device=self.device)
             dones = torch.as_tensor(dones, device=self.device)
-            output = self.predicter(states, train=True)
-            output = F.softmax(output, dim=1)
-            q_values = self.qnetwork_local(states)
-            best_action = torch.argmax(q_values).item()
+            with torch.no_grad():
+                output = self.predicter(states, train=True)
+                output = F.softmax(output, dim=1)
+                q_values = self.qnetwork_local(states)
+                best_action = torch.argmax(q_values).item()
+                actions = actions.type(torch.int64)
+                q_max = q_values.max(1)
+            
+            print("q values", q_values)
+            print("q action", q_values[0][actions.item()].item())
+            print("q best", q_max[0].data)
+
             if  actions.item() == best_action:
                 same_action += 1
+                continue
                 print("-------------------------------------------------------------------------------")
+                print("state ", i)
                 print("expert ", actions)
                 print("q values", q_values.data)
                 print("action prob predicter  ", output.data)
                 self.compute_r_function(states, actions.unsqueeze(0), True)
                 self.compute_q_function(states, next_states.unsqueeze(0), actions.unsqueeze(0), dones, True)
             else:
+                continue
                 # logging.debug("experte action  {} q fun {}".format(actions.item(), q_values))
                 print("-------------------------------------------------------------------------------")
+                print("state ", i)
                 print("expert ", actions)
                 print("q values", q_values.data)
                 print("action prob predicter  ", output.data)
                 self.compute_r_function(states, actions.unsqueeze(0), True)
                 self.compute_q_function(states, next_states.unsqueeze(0), actions.unsqueeze(0), dones, True)
+             
         self.average_same_action.append(same_action)
         av_action = np.mean(self.average_same_action)
         self.writer.add_scalar('Same_action', same_action, self.steps)
