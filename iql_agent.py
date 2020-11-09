@@ -5,7 +5,7 @@ import random
 import gym
 import gym.wrappers
 from collections import namedtuple, deque
-from models import QNetwork, Classifier
+from models import QNetwork, Classifier, RNetwork
 import torch
 import torch.nn  as nn
 import torch.nn.functional as F
@@ -15,6 +15,8 @@ from torch.autograd import Variable
 torch.set_printoptions(threshold=5000)
 import logging
 from datetime import datetime
+import time
+
 
 logging.basicConfig(filename="test.log", level=logging.DEBUG)
 
@@ -37,27 +39,29 @@ class Agent():
         self.lr = config["lr"]
         self.tau = config["tau"]
         self.gamma = 0.99
-        self.qnetwork_local = QNetwork(state_size, action_size, self.seed).to(self.device)
-        self.qnetwork_target = QNetwork(state_size, action_size, self.seed).to(self.device)
+        self.fc1 = config["fc1_units"]
+        self.fc2 = config["fc2_units"]
+        self.qnetwork_local = QNetwork(state_size, action_size, self.fc1, self.fc2, self.seed).to(self.device)
+        self.qnetwork_target = QNetwork(state_size, action_size, self.fc1, self.fc2, self.seed).to(self.device)
         self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=self.lr)
-        self.soft_update(self.qnetwork_local, self.qnetwork_target, 1)
+        self.soft_update(self.qnetwork_local, self.qnetwork_target, self.lr)
         
-        self.q_shift_local = QNetwork(state_size, action_size, self.seed).to(self.device)
-        self.q_shift_target = QNetwork(state_size, action_size, self.seed).to(self.device)
+        self.q_shift_local = QNetwork(state_size, action_size, self.fc1, self.fc2, self.seed).to(self.device)
+        self.q_shift_target = QNetwork(state_size, action_size, self.fc1, self.fc2, self.seed).to(self.device)
         self.optimizer_shift = optim.Adam(self.q_shift_local.parameters(), lr=self.lr)
         self.soft_update(self.q_shift_local, self.q_shift_target, 1)
          
-        self.R_local = QNetwork(state_size, action_size, self.seed).to(self.device)
-        self.R_target = QNetwork(state_size, action_size, self.seed).to(self.device)
+        self.R_local = QNetwork(state_size, action_size, self.fc1, self.fc2, self.seed).to(self.device)
+        self.R_target = QNetwork(state_size, action_size, self.fc1, self.fc2, self.seed).to(self.device)
         self.optimizer_r = optim.Adam(self.R_local.parameters(), lr=self.lr)
         self.soft_update(self.R_local, self.R_target, 1)
         
         self.memory = Memory(action_size, config["buffer_size"], self.batch_size, self.seed, self.device)
         self.t_step = 0
         self.steps = 0
-        self.predicter = Classifier(state_size, action_size, self.seed).to(self.device)
+        self.predicter = Classifier(state_size, action_size, seed=self.seed).to(self.device)
         self.optimizer_pre = optim.Adam(self.predicter.parameters(), lr=self.lr_pre)
-        pathname = "lr {} batch_size {} seed {}".format(self.lr, self.batch_size, self.seed)
+        pathname = "lr {} batch_size {} fc1 {}  fc2 {} seed {}".format(self.lr, self.batch_size,  self.fc1, self.fc2, self.seed)
         now = datetime.now()    
         dt_string = now.strftime("%d_%m_%Y_%H:%M:%S")
         pathname += dt_string
@@ -73,6 +77,7 @@ class Agent():
     
     
     def learn(self, memory):
+        logging.debug("--------------------------New episode-----------------------------------------------")
         states, next_states, actions, dones = memory.expert_policy(self.batch_size)
         self.steps += 1
         self.state_action_frq(states, actions)
@@ -140,7 +145,7 @@ class Agent():
         self.predicter.train()
 
 
-    def get_action_prob(self, states, actions, predict=False):
+    def get_action_prob(self, states, actions):
         """
         """
         actions = actions.type(torch.long)
@@ -149,13 +154,10 @@ class Agent():
         output = F.softmax(output, dim=1)
         # output = output.squeeze(0)
         action_prob = output.gather(1, actions)
-        if predict:
-            if action_prob.item() < 1e-3:
-                return None
         action_prob = action_prob + torch.finfo(torch.float32).eps
         # logging.debug("action_prob {})".format(action_prob))
         action_prob = torch.log(action_prob)
-        action_prob = torch.clamp(action_prob, min=-3, max=0)
+        action_prob = torch.clamp(action_prob, min= -1, max=0)
         return action_prob
 
     def compute_shift_function(self, states, next_states, actions, dones):
@@ -168,9 +170,11 @@ class Agent():
         actions = actions.type(torch.int64)
         with torch.no_grad():
             # Get max predicted Q values (for next states) from target model
-            Q_targets_next = self.qnetwork_target(next_states).max(1)[0].unsqueeze(1)
+            qt = self.q_shift_local(next_states)
+            max_q, max_actions = qt.max(1)
+            Q_targets_next = self.qnetwork_target(next_states).gather(1, max_actions.unsqueeze(1))
             # Compute Q targets for current states
-            Q_targets = (self.gamma * Q_targets_next * (1 - dones))
+            Q_targets = (self.gamma * Q_targets_next * (dones))
 
         # Get expected Q values from local model
         Q_expected = self.q_shift_local(states).gather(1, actions)
@@ -186,7 +190,7 @@ class Agent():
         # ------------------- update target network ------------------- #
         self.soft_update(self.q_shift_local, self.q_shift_target)
 
-    def compute_r_function(self, states, actions, debug=False):
+    def compute_r_function(self, states, actions, debug=False, log=False):
         """
 
         """
@@ -208,8 +212,8 @@ class Agent():
                 taken_actions = 0
                 for b in self.all_actions:
                     b = b.type(torch.int64).unsqueeze(1)
-                    n_b = self.get_action_prob(s.unsqueeze(0), b, True)
-                    if torch.eq(a, b) or n_b is None:
+                    n_b = self.get_action_prob(s.unsqueeze(0), b)
+                    if torch.eq(a, b):
                         #print(n_b)
                         continue
                     taken_actions += 1
@@ -234,6 +238,12 @@ class Agent():
             y_r = y_r_part1 + y_r_part2
             #print("_________________")
             #print("r update zeros ", len(all_zeros))
+
+
+        if log:
+            text = "Action {:.2f}  y target {:.2f} =  n_a {:.2f} + {:.2f} and pre{:.2f}".format(actions.item(), y_r.item(), y_r_part1.item(), y_r_part2.item(), y.item())
+            logging.debug(text)
+
         if debug:
             print("expet action ", actions.item())
             # print("y r {:.3f}".format(y.item()))
@@ -255,11 +265,11 @@ class Agent():
             print("after update r pre ", self.R_local(states).gather(1, actions).item())
             print("after update r target ", self.R_target(states).gather(1, actions).item())
         # ------------------- update target network ------------------- #
-        self.soft_update(self.R_local, self.R_target)
+        self.soft_update(self.R_local, self.R_target, 5e-3)
         if debug:
             print("after soft upda r target ", self.R_target(states).gather(1, actions).item())
     
-    def compute_q_function(self, states, next_states, actions, dones, debug=False):
+    def compute_q_function(self, states, next_states, actions, dones, debug=False, log= False):
         """Update value parameters using given batch of experience tuples.
         Params
         ======
@@ -271,13 +281,14 @@ class Agent():
             print("---------------q_update------------------")
             print("expet action ", actions.item())
             print("state ", states)
-        
         with torch.no_grad():
             # Get max predicted Q values (for next states) from target model
-            Q_targets_next = self.qnetwork_target(next_states).max(1)[0].unsqueeze(1)
+            qt = self.q_shift_local(next_states)
+            max_q, max_actions = qt.max(1)
+            Q_targets_next = self.qnetwork_target(next_states).gather(1, max_actions.unsqueeze(1))
             # Compute Q targets for current states
             rewards = self.R_target(states).gather(1, actions)
-            Q_targets = rewards + (self.gamma * Q_targets_next * (1 - dones))
+            Q_targets = rewards + (self.gamma * Q_targets_next * (dones))
             if debug:
                 print("reward  {}".format(rewards.item()))
                 print("Q target next {}".format(Q_targets_next.item()))
@@ -287,9 +298,11 @@ class Agent():
 
         # Get expected Q values from local model
         Q_expected = self.qnetwork_local(states).gather(1, actions)
+        if log:
+            text = "Action {:.2f}  q target {:.2f} =  r_a {:.2f} + target {:.2f} and pre{:.2f}".format(actions.item(), Q_targets.item(), rewards.item(), Q_targets_next.item(), Q_expected.item())
+            logging.debug(text)
         if debug:
             print("q for a {}".format(Q_expected))
-        #print("pre", Q_expected.shape)
         # Compute loss
         loss = F.mse_loss(Q_expected, Q_targets)
         self.writer.add_scalar('Q_loss', loss, self.steps)
@@ -335,6 +348,23 @@ class Agent():
                 print('\nEnvironment solved in {:d} episodes!\tAverage Score: {:.2f}'.format(i_episode-100, np.mean(scores_window)))
                 break
 
+
+
+    def test_policy(self):
+        env =  gym.make('LunarLander-v2')
+        state = env.reset()
+        score = 0
+        for t in range(200):
+            state = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
+            q_values = self.qnetwork_local(state)
+            action = torch.argmax(q_values).item()
+            next_state, reward, done, _ = env.step(action)
+            state = next_state
+            score += reward
+            if done:
+                print("score", score)
+                self.writer.add_scalar('score', score, self.steps)
+                break
 
 
     def step(self, state, action, reward, next_state, done):
@@ -411,8 +441,13 @@ class Agent():
 
     def test_q_value(self, memory):
         same_action = 0
-        test_elements = memory.idx
+        test_elements = 1000
+        all_diff = 0
+        error = True
         for i in range(test_elements):
+            # print("lop", i)
+            text = "eval {} / {}\r".format(i, test_elements)
+            print(text, end='')
             states = memory.obses[i]
             next_states = memory.next_obses[i]
             actions = memory.actions[i]
@@ -428,32 +463,61 @@ class Agent():
                 best_action = torch.argmax(q_values).item()
                 actions = actions.type(torch.int64)
                 q_max = q_values.max(1)
-            
-            print("q values", q_values)
-            print("q action", q_values[0][actions.item()].item())
-            print("q best", q_max[0].data)
+                
+                #print("q values", q_values)
+                q = q_values[0][actions.item()].item()
+                #print("q action", q)
+                max_q =  q_max[0].data.item()
+                diff = max_q - q
+                all_diff += diff
+                #print("q best", max_q)
+                #print("difference ", diff)
+            if  actions.item() != best_action and False:
+                r = self.R_local(states)
+                rt = self.R_target(states)
+                qt = self.qnetwork_target(states)
+                logging.debug("------------------false action --------------------------------")
+                logging.debug("expert action  {})".format(actions.item()))
+                logging.debug("out predicter a0: {:.2f} a1: {:.2f} a2: {:.2f} a3: {:.2f}  )".format(output.data[0][0], output.data[0][1], output.data[0][2], output.data[0][3]))
+                logging.debug("q values a0: {:.2f} a1: {:.2f} a2: {:.2f} a3: {:.2f}  )".format(q_values.data[0][0], q_values.data[0][1], q_values.data[0][2], q_values.data[0][3]))
+                logging.debug("q target a0: {:.2f} a1: {:.2f} a2: {:.2f} a3: {:.2f}  )".format(qt.data[0][0], qt.data[0][1], qt.data[0][2], qt.data[0][3]))
+                logging.debug("rewards a0: {:.2f} a1: {:.2f} a2: {:.2f} a3: {:.2f}  )".format(r.data[0][0], r.data[0][1], r.data[0][2], r.data[0][3]))
+                logging.debug("re target a0: {:.2f} a1: {:.2f} a2: {:.2f} a3: {:.2f}  )".format(rt.data[0][0], rt.data[0][1], rt.data[0][2], rt.data[0][3]))
+                logging.debug("---------Reward Function------------")
+                action = torch.Tensor(1) * 0 +  0
+                self.compute_r_function(states, action.unsqueeze(0).to(self.device), log= True)
+                action = torch.Tensor(1) * 0 +  1
+                self.compute_r_function(states, action.unsqueeze(0).to(self.device), log= True)
+                action = torch.Tensor(1) * 0 +  2
+                self.compute_r_function(states, action.unsqueeze(0).to(self.device), log= True)
+                action = torch.Tensor(1) * 0 +  3
+                self.compute_r_function(states, action.unsqueeze(0).to(self.device), log= True)
+                logging.debug("------------------Q Function --------------------------------")
+                action = torch.Tensor(1) * 0 +  0
+                self.compute_q_function(states, next_states.unsqueeze(0), action.unsqueeze(0).to(self.device), dones, log= True)
+                action = torch.Tensor(1) * 0 +  1
+                self.compute_q_function(states, next_states.unsqueeze(0), action.unsqueeze(0).to(self.device), dones, log= True)
+                action = torch.Tensor(1) * 0 +  2
+                self.compute_q_function(states, next_states.unsqueeze(0), action.unsqueeze(0).to(self.device), dones, log= True)
+                action = torch.Tensor(1) * 0 +  3
+                self.compute_q_function(states, next_states.unsqueeze(0), action.unsqueeze(0).to(self.device), dones, log= True)
+                
+                
 
             if  actions.item() == best_action:
                 same_action += 1
-                continue
-                print("-------------------------------------------------------------------------------")
-                print("state ", i)
-                print("expert ", actions)
-                print("q values", q_values.data)
-                print("action prob predicter  ", output.data)
-                self.compute_r_function(states, actions.unsqueeze(0), True)
-                self.compute_q_function(states, next_states.unsqueeze(0), actions.unsqueeze(0), dones, True)
             else:
-                continue
+                if error:
+                    continue
+                    print("-------------------------------------------------------------------------------")
+                    print("expert action ", actions.item())
+                    print("best action q ", best_action)
+                    print(i)
+                    error = False
                 # logging.debug("experte action  {} q fun {}".format(actions.item(), q_values))
-                print("-------------------------------------------------------------------------------")
-                print("state ", i)
-                print("expert ", actions)
-                print("q values", q_values.data)
-                print("action prob predicter  ", output.data)
-                self.compute_r_function(states, actions.unsqueeze(0), True)
-                self.compute_q_function(states, next_states.unsqueeze(0), actions.unsqueeze(0), dones, True)
-             
+
+
+        self.writer.add_scalar('diff', all_diff, self.steps)
         self.average_same_action.append(same_action)
         av_action = np.mean(self.average_same_action)
         self.writer.add_scalar('Same_action', same_action, self.steps)
@@ -562,7 +626,6 @@ class Memory:
     def __len__(self):
         """Return the current size of internal memory."""
         return len(self.memory)
-
 
 
 
